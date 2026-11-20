@@ -1,0 +1,18 @@
+# Python packages this project needs. Install with: pip install -r requirements.txt
+# Versions are pinned (==) so every rerun, including GitHub Actions, uses exactly the same code.
+
+# Tables in memory: read the PaySim CSV, build the fee schedule and settlement ledger
+pandas==3.1.1
+
+# Talk to BigQuery: load tables, run the SQL checks, read results back
+google-cloud-bigquery==3.47.0
+
+# Helpers BigQuery needs to move data to and from pandas
+pyarrow==26.0.1
+db-dtypes==1.9.0
+
+# Call the Claude API for exception triage
+anthropic==2.12.0
+
+# Read settings and keys from the .env file into the environment
+python-dotenv==1.2.4
