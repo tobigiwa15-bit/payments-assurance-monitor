@@ -1,0 +1,22 @@
+# Secrets: never commit credentials
+.env
+*.json.key
+service-account*.json
+
+# Data (too large for git; download or regenerate instead)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Editor and tool settings (personal to each machine; contain local paths)
+.vscode/
+.claude/
+
+# Windows system files
+Thumbs.db
+desktop.ini
