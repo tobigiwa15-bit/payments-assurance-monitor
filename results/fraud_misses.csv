@@ -1,0 +1,9 @@
+type,pattern,missed_frauds,at_10m_transaction_cap
+CASH_OUT,moved more than the balance,3,0
+TRANSFER,moved more than the balance,1,0
+CASH_OUT,balance recorded as zero before,21,0
+TRANSFER,"moved the full balance, but balance after not zero",10,0
+TRANSFER,moved only part of the balance,149,145
+TRANSFER,balance recorded as zero before,4,0
+CASH_OUT,moved only part of the balance,1,0
+CASH_OUT,"zero amount, zero balance",16,0
