@@ -62,6 +62,9 @@ SELECT
 
   IF(ai.ai_category IS NULL, 'Awaiting triage', 'Triaged by AI')
                                          AS triage_status,
+  -- 1/0 version of the same thing, so "open items" is a plain SUM on the
+  -- dashboard, with no filter hidden inside a chart setting.
+  IF(ai.ai_category IS NULL, 1, 0)       AS awaiting_triage,
   ai.ai_category,
   ai.ai_note
 FROM exceptions AS e
