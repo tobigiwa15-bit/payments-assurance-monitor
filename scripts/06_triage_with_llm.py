@@ -13,11 +13,17 @@ the BigQuery table triage_results.
 The evidence comes from the triage_sample view, never from the hand-labels file,
 so the AI cannot see the human labels.
 
+Incremental, with a cost cap: an exception already triaged successfully by the
+same model and prompt version is skipped, and at most --max exceptions are sent
+per run. Rerunning never pays twice for the same answer. To re-triage on
+purpose, change the prompt and give it a new version (triage_v2).
+
 Run from the project folder, with .venv active, after 05_build_triage_sample.py:
-    python scripts/06_triage_with_llm.py                     (Claude Opus 5.5)
-    python scripts/06_triage_with_llm.py claude-haiku-5-5    (another model)
+    python scripts/06_triage_with_llm.py                              (Claude Opus 5.5, max 20)
+    python scripts/06_triage_with_llm.py --model claude-haiku-5-5 --max 100
 """
 
+import argparse
 import hashlib
 import json
 import os
@@ -28,14 +34,20 @@ from pathlib import Path
 import anthropic
 import pandas as pd
 from dotenv import load_dotenv
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = f"{os.getenv('GCP_PROJECT_ID')}.payments_assurance"
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", default="claude-opus-5-5")
+parser.add_argument("--max", type=int, default=20, help="most exceptions to send in one run")
+args = parser.parse_args()
+
 # --- Settings, all logged with every result -------------------------------------
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "claude-opus-5-5"
+MODEL = args.model
 EFFORT = "low"  # classification against a fixed rubric doesn't need deep reasoning
 PROMPT_VERSION = "triage_v1"
 PROMPT = (ROOT / "prompts" / f"{PROMPT_VERSION}.txt").read_text(encoding="utf-8")
@@ -67,10 +79,42 @@ claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 sample = bq.query(
     f"SELECT * FROM `{DATASET}.triage_sample` ORDER BY sample_id"
 ).to_dataframe(create_bqstorage_client=False)
-print(f"Triaging {len(sample)} exceptions with {MODEL} (run {RUN_ID})...")
+
+# --- Skip what's already done -----------------------------------------------------
+# Exceptions this model already answered under this prompt version. Failed or
+# refused attempts don't count, so they're retried on the next run.
+# @model and @prompt_version are query parameters (like bind variables in
+# Oracle): the values are passed separately, never pasted into the SQL text.
+done_sql = f"""
+    SELECT DISTINCT txn_id, check_name
+    FROM `{DATASET}.triage_results`
+    WHERE model_requested = @model
+      AND prompt_version = @prompt_version
+      AND ai_category IS NOT NULL
+"""
+job_config = bigquery.QueryJobConfig(query_parameters=[
+    bigquery.ScalarQueryParameter("model", "STRING", MODEL),
+    bigquery.ScalarQueryParameter("prompt_version", "STRING", PROMPT_VERSION),
+])
+try:
+    done = bq.query(done_sql, job_config=job_config).to_dataframe(create_bqstorage_client=False)
+except NotFound:  # very first run: the results table doesn't exist yet
+    done = pd.DataFrame(columns=["txn_id", "check_name"])
+
+todo = sample.merge(done, on=["txn_id", "check_name"], how="left", indicator=True)
+todo = todo[todo["_merge"] == "left_only"].drop(columns="_merge")
+print(f"{len(sample)} exceptions in the sample, {len(done)} already triaged by {MODEL} "
+      f"with {PROMPT_VERSION}, {len(todo)} to do.")
+
+if todo.empty:
+    print("Nothing new to triage. No API calls made.")
+    sys.exit(0)
+
+todo = todo.head(args.max)  # the cost cap
+print(f"Triaging {len(todo)} exceptions with {MODEL} (run {RUN_ID}, cap {args.max})...")
 
 results = []
-for _, row in sample.iterrows():
+for _, row in todo.iterrows():
     # Evidence as "field: value" lines. sample_id is our bookkeeping, not evidence.
     evidence = "\n".join(
         f"{field}: {'' if pd.isna(value) else value}"
@@ -101,6 +145,11 @@ for _, row in sample.iterrows():
         if stop_reason == "end_turn":
             answer = json.loads(next(b.text for b in response.content if b.type == "text"))
             category, note = answer["category"], answer["note"]
+    except anthropic.AuthenticationError:
+        # A rejected or expired key affects every request, so stop loudly (the
+        # GitHub run turns red) instead of recording 20 identical failures.
+        sys.exit("Claude API key rejected or expired. Create a new key and update "
+                 ".env (local) or the ANTHROPIC_API_KEY secret (GitHub).")
     except anthropic.APIError as error:
         # Record the failure and carry on; a missing answer goes to human review.
         stop_reason = f"api_error: {type(error).__name__}"

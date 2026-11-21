@@ -1,0 +1,61 @@
+# Daily assurance run.
+#
+# Every day, on a fresh GitHub machine: keep the BigQuery tables from expiring,
+# refresh the four checks and the accuracy figures, and triage any exceptions
+# the AI hasn't seen yet (at most 20, as a cost cap).
+#
+# It needs three repository secrets (Settings > Secrets and variables > Actions):
+#   GCP_SA_KEY         the full contents of the service-account key file
+#   GCP_PROJECT_ID     the Google Cloud project ID
+#   ANTHROPIC_API_KEY  a Claude API key used only by this workflow
+
+name: Daily assurance run
+
+on:
+  schedule:
+    - cron: "0 6 * * *"      # 06:00 UTC (07:00 in Lagos), every day
+  workflow_dispatch:          # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: read              # the run may read the code, nothing more
+
+jobs:
+  assurance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Install Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install the pinned packages
+        run: pip install -r requirements.txt
+
+      - name: Log in to Google Cloud as the service account
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # First, so the tables survive even if a later step fails.
+      - name: Keep the tables from expiring
+        run: python scripts/08_keep_tables_alive.py
+
+      - name: Refresh the checks
+        run: python scripts/03_create_checks.py
+
+      - name: Refresh the accuracy figures
+        run: python scripts/04_measure_accuracy.py
+
+      # The Claude key is given to this step only, not to the whole job.
+      - name: Triage new exceptions (at most 20)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/06_triage_with_llm.py --max 20
