@@ -1,0 +1,11 @@
+model,run_id,prompt_version,check_name,labelled,agreed,agreement_rate
+claude-haiku-5-5,20261121T144250Z,triage_v1,ALL,100,93,0.93
+claude-haiku-5-5,20261121T144250Z,triage_v1,duplicate_settlement,25,25,1.0
+claude-haiku-5-5,20261121T144250Z,triage_v1,fee_recompute,25,21,0.84
+claude-haiku-5-5,20261121T144250Z,triage_v1,fraud_account_drain,25,25,1.0
+claude-haiku-5-5,20261121T144250Z,triage_v1,settlement_recon,25,22,0.88
+claude-opus-5-5,20261121T143504Z,triage_v1,ALL,100,100,1.0
+claude-opus-5-5,20261121T143504Z,triage_v1,duplicate_settlement,25,25,1.0
+claude-opus-5-5,20261121T143504Z,triage_v1,fee_recompute,25,25,1.0
+claude-opus-5-5,20261121T143504Z,triage_v1,fraud_account_drain,25,25,1.0
+claude-opus-5-5,20261121T143504Z,triage_v1,settlement_recon,25,25,1.0
