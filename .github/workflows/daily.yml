@@ -1,8 +1,8 @@
 # Daily assurance run.
 #
 # Every day, on a fresh GitHub machine: keep the BigQuery tables from expiring,
-# refresh the four checks and the accuracy figures, and triage any exceptions
-# the AI hasn't seen yet (at most 20, as a cost cap).
+# refresh the four checks and the accuracy figures, triage any exceptions the
+# AI hasn't seen yet (at most 20, as a cost cap), and refresh the dashboard views.
 #
 # It needs three repository secrets (Settings > Secrets and variables > Actions):
 #   GCP_SA_KEY         the full contents of the service-account key file
@@ -59,3 +59,6 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/06_triage_with_llm.py --max 20
+
+      - name: Refresh the dashboard views
+        run: python scripts/09_create_dashboard_views.py
