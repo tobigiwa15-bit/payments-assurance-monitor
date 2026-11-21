@@ -4,6 +4,9 @@
 # Tables in memory: read the PaySim CSV, build the fee schedule and settlement ledger
 pandas==3.1.1
 
+# Number crunching and the seeded random choices used to plant errors
+numpy==2.5.5
+
 # Talk to BigQuery: load tables, run the SQL checks, read results back
 google-cloud-bigquery==3.47.0
 
