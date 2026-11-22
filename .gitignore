@@ -6,6 +6,10 @@ service-account*.json
 # Data (too large for git; download or regenerate instead)
 data/
 
+# Blank labelling sheet; scripts/05_build_triage_sample.py regenerates it.
+# The filled-in labels (labels/hand_labels.csv) are committed.
+labels/to_label.csv
+
 # Python
 __pycache__/
 *.pyc
