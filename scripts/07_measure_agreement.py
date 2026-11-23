@@ -36,6 +36,9 @@ human["my_label"] = human["my_label"].str.strip()
 
 # --- The latest AI run for each model -------------------------------------------
 runs = pd.concat(pd.read_csv(f) for f in RESULTS.glob("triage_*.csv"))
+# Benchmark rows only: queue runs (06 --source queue) have no sample_id and no
+# human label to compare with, so they must never count as the "latest run".
+runs = runs[runs["sample_id"].notna()]
 latest = runs.groupby("model_requested")["run_id"].transform("max")
 runs = runs[runs["run_id"] == latest]
 

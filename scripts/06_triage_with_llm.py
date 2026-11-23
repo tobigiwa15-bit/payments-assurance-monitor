@@ -1,17 +1,22 @@
 """
-Step 6: triage the sampled exceptions with Claude.
+Step 6: triage exceptions with Claude.
 
-For each of the 100 exceptions in the view triage_sample, send the evidence to
-Claude with the prompt in prompts/triage_v1.txt, and get back a category and a
-short investigation note.
+Send each exception's evidence to Claude with the prompt in
+prompts/triage_v1.txt, and get back a category and a short investigation note.
+
+Two sources:
+  --source sample  the 100 hand-labelled exceptions (view triage_sample), used
+                   to benchmark the AI against human labels (step 7)
+  --source queue   every exception from the four checks (view triage_queue),
+                   worked through 20 a day by the scheduled run
 
 Every result is logged with the prompt version and a fingerprint of the exact
 prompt text, the model asked for and the model that answered, the settings,
 the time, and the tokens used. Results are saved to results/ and appended to
 the BigQuery table triage_results.
 
-The evidence comes from the triage_sample view, never from the hand-labels file,
-so the AI cannot see the human labels.
+The evidence comes from the views, never from the hand-labels file, so the AI
+cannot see the human labels.
 
 Incremental, with a cost cap: an exception already triaged successfully by the
 same model and prompt version is skipped, and at most --max exceptions are sent
@@ -19,8 +24,9 @@ per run. Rerunning never pays twice for the same answer. To re-triage on
 purpose, change the prompt and give it a new version (triage_v2).
 
 Run from the project folder, with .venv active, after 05_build_triage_sample.py:
-    python scripts/06_triage_with_llm.py                              (Claude Opus 5.5, max 20)
+    python scripts/06_triage_with_llm.py                              (sample, Claude Opus 5.5, max 20)
     python scripts/06_triage_with_llm.py --model claude-haiku-5-5 --max 100
+    python scripts/06_triage_with_llm.py --source queue --max 20      (what the daily run does)
 """
 
 import argparse
@@ -44,6 +50,8 @@ DATASET = f"{os.getenv('GCP_PROJECT_ID')}.payments_assurance"
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default="claude-opus-5-5")
 parser.add_argument("--max", type=int, default=20, help="most exceptions to send in one run")
+parser.add_argument("--source", choices=["sample", "queue"], default="sample",
+                    help="sample = the 100 hand-labelled exceptions; queue = all exceptions")
 args = parser.parse_args()
 
 # --- Settings, all logged with every result -------------------------------------
@@ -76,9 +84,16 @@ ANSWER_FORMAT = {
 bq = bigquery.Client(project=os.getenv("GCP_PROJECT_ID"))
 claude = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 
-sample = bq.query(
-    f"SELECT * FROM `{DATASET}.triage_sample` ORDER BY sample_id"
-).to_dataframe(create_bqstorage_client=False)
+if args.source == "queue":
+    # Create or refresh the queue view first, so it always matches the checks.
+    queue_sql = (ROOT / "sql" / "triage" / "02_triage_queue.sql").read_text()
+    bq.query(queue_sql.replace("{dataset}", DATASET)).result()
+    # Take turns across the checks, largest amount first (see the SQL file).
+    source_sql = f"SELECT * FROM `{DATASET}.triage_queue` ORDER BY queue_rank, check_name"
+else:
+    source_sql = f"SELECT * FROM `{DATASET}.triage_sample` ORDER BY sample_id"
+
+sample = bq.query(source_sql).to_dataframe(create_bqstorage_client=False)
 
 # --- Skip what's already done -----------------------------------------------------
 # Exceptions this model already answered under this prompt version. Failed or
@@ -103,7 +118,7 @@ except NotFound:  # very first run: the results table doesn't exist yet
 
 todo = sample.merge(done, on=["txn_id", "check_name"], how="left", indicator=True)
 todo = todo[todo["_merge"] == "left_only"].drop(columns="_merge")
-print(f"{len(sample)} exceptions in the sample, {len(done)} already triaged by {MODEL} "
+print(f"{len(sample)} exceptions in the {args.source}, {len(done)} already triaged by {MODEL} "
       f"with {PROMPT_VERSION}, {len(todo)} to do.")
 
 if todo.empty:
@@ -115,12 +130,15 @@ print(f"Triaging {len(todo)} exceptions with {MODEL} (run {RUN_ID}, cap {args.ma
 
 results = []
 for _, row in todo.iterrows():
-    # Evidence as "field: value" lines. sample_id is our bookkeeping, not evidence.
+    # Evidence as "field: value" lines. sample_id and queue_rank are our
+    # bookkeeping, not evidence.
     evidence = "\n".join(
         f"{field}: {'' if pd.isna(value) else value}"
         for field, value in row.items()
-        if field != "sample_id"
+        if field not in ("sample_id", "queue_rank")
     )
+    # Queue rows have no sample_id; they aren't part of the labelled benchmark.
+    sample_id = int(row["sample_id"]) if "sample_id" in row else None
 
     request = dict(
         model=MODEL,
@@ -156,7 +174,7 @@ for _, row in todo.iterrows():
 
     results.append({
         "run_id": RUN_ID,
-        "sample_id": int(row["sample_id"]),
+        "sample_id": sample_id,
         "check_name": row["check_name"],
         "txn_id": int(row["txn_id"]),
         "ai_category": category,
@@ -171,10 +189,13 @@ for _, row in todo.iterrows():
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     })
-    print(f"  {row['sample_id']:>3}  {row['check_name']:<22} -> {category or stop_reason}")
+    print(f"  {row['txn_id']:>8}  {row['check_name']:<22} -> {category or stop_reason}")
 
 # --- Save ---------------------------------------------------------------------
 table = pd.DataFrame(results)
+# Whole numbers that may be blank (queue rows): keeps the column an INTEGER in
+# BigQuery instead of turning into decimals.
+table["sample_id"] = table["sample_id"].astype("Int64")
 out_file = ROOT / "results" / f"triage_{RUN_ID}_{MODEL}.csv"
 table.to_csv(out_file, index=False)
 

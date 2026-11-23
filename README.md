@@ -21,7 +21,7 @@ All data is synthetic: the public PaySim dataset plus fees and settlements gener
 | What | Result | Produced by |
 |---|---|---|
 | Transactions checked | **6,362,620** | `scripts/02_load_to_bigquery.py` (load control) |
-| Exceptions raised | **14,008** across 4 checks | `scripts/09_create_dashboard_views.py` → `dash_summary` |
+| Exceptions raised | **14,008** across 4 checks | `scripts/03_create_checks.py`; totals in `scripts/09_create_dashboard_views.py` → `dash_summary` |
 | Revenue leakage found | **13,873,496.60** | same |
 | Amount owed to merchants | **12,702,288.36** | same |
 | Planted-error checks (fee, settlement, duplicate) | **100% precision, 100% recall**: 5,000 of 5,000 planted errors, 0 false positives | `scripts/04_measure_accuracy.py` → `results/accuracy_by_check.csv` |
@@ -52,7 +52,12 @@ flowchart LR
 
 - **Warehouse:** Google BigQuery (free sandbox). Money is stored as `NUMERIC`, never floats, and fees are calculated in integer cents with half-up rounding.
 - **Checks are SQL views,** so the logic lives in version-controlled files in `sql/checks/`. The dashboard does no maths of its own: every figure comes from the views in `sql/dashboard/`.
-- **Schedule:** `.github/workflows/daily.yml` runs every morning. It extends the tables' expiry, so the sandbox's 60-day limit never bites. It then refreshes the checks and accuracy figures, triages up to 20 new exceptions, and rebuilds the dashboard views.
+- **Schedule:** `.github/workflows/daily.yml` is scheduled for every morning. GitHub treats the time as best-effort, and scheduled runs have started several hours late. Each run:
+  1. rebuilds any table or view the sandbox is about to delete;
+  2. refreshes the checks and accuracy figures;
+  3. triages the next 20 exceptions in the queue;
+  4. rebuilds the dashboard views.
+- **Sandbox expiry, learned the hard way:** the sandbox deletes objects 60 days after they're *created*. The first keep-alive pushed expiry dates forward, and BigQuery started rejecting that once the tables were two days old. The fix rebuilds an object as a copy of itself (`CREATE OR REPLACE TABLE x AS SELECT * FROM x`), which restarts its 60-day clock. A row-count control confirms nothing was lost (`scripts/08_keep_tables_alive.py`).
 - **Secrets:** API keys and the service-account key live in a git-ignored `.env` locally and in GitHub Actions secrets in CI. The service account has only two roles: BigQuery Data Editor and BigQuery Job User.
 
 ### The four checks
@@ -105,7 +110,9 @@ The categories are `fee_error`, `data_error`, `likely_fraud` or `needs_investiga
 
 - **Structured output:** a JSON schema with an enum, so the model can't invent a category.
 - **Traceability:** every answer is stored with the prompt version and SHA-256 fingerprint, the model requested and the model that actually served it, a run ID and token counts (`triage_results` table).
-- **Cost control:** the daily run only triages exceptions that this model and prompt version haven't answered, and at most 20 per run. A day with nothing new costs $0. The benchmark runs cost about $0.80 (Opus, 100 exceptions) and $0.02 (Haiku).
+- **Daily queue:** the scheduled run works through every exception, 20 a day (`sql/triage/02_triage_queue.sql`). It takes turns across the four checks, largest amount first within each, so fraud flags (8,008 of the 14,008) don't crowd out the rest. Answers feed the dashboard's triage page, and the "open items" count falls as the queue is worked.
+- **Cost control:** an exception already answered by the same model and prompt version is never sent again, and each run is capped at 20. With Opus that's about $0.16 a day. The benchmark runs cost about $0.80 (Opus, 100 exceptions) and $0.02 (Haiku).
+- **The benchmark stays separate:** queue answers carry no `sample_id`, and `scripts/07_measure_agreement.py` scores only runs over the 100 hand-labelled exceptions.
 
 **Benchmark:**
 
@@ -171,10 +178,11 @@ Requirements:
 | 3 | `python scripts/03_create_checks.py` | Creates the 4 check views and prints exception counts |
 | 4 | `python scripts/04_measure_accuracy.py` | Precision and recall → `results/` |
 | 5 | `python scripts/05_build_triage_sample.py` | Exports the 100-exception sample for blind labelling |
-| 6 | `python scripts/06_triage_with_llm.py --model claude-opus-5-5 --max 100` | AI triage |
+| 6 | `python scripts/06_triage_with_llm.py --model claude-opus-5-5 --max 100` | AI triage of the 100-exception benchmark |
 | 7 | `python scripts/07_measure_agreement.py` | AI agreement with the hand labels → `results/` |
-| 8 | `python scripts/08_keep_tables_alive.py` | Extends table expiry (sandbox) |
-| 9 | `python scripts/09_create_dashboard_views.py` | Dashboard views and headline totals |
+| 8 | `python scripts/08_keep_tables_alive.py` | Rebuilds tables and views close to the sandbox's 60-day deletion |
+| 9 | `python scripts/06_triage_with_llm.py --source queue --max 20` | The daily queue triage (what the schedule runs) |
+| 10 | `python scripts/09_create_dashboard_views.py` | Dashboard views and headline totals |
 
 ## Repository layout
 

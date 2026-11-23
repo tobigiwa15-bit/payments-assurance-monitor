@@ -1,8 +1,9 @@
 # Daily assurance run.
 #
-# Every day, on a fresh GitHub machine: keep the BigQuery tables from expiring,
-# refresh the four checks and the accuracy figures, triage any exceptions the
-# AI hasn't seen yet (at most 20, as a cost cap), and refresh the dashboard views.
+# Every day, on a fresh GitHub machine: rebuild any BigQuery table or view that
+# the sandbox is about to delete, refresh the four checks and the accuracy
+# figures, triage the next 20 exceptions in the queue (a cost cap), and refresh
+# the dashboard views.
 #
 # It needs three repository secrets (Settings > Secrets and variables > Actions):
 #   GCP_SA_KEY         the full contents of the service-account key file
@@ -13,7 +14,10 @@ name: Daily assurance run
 
 on:
   schedule:
-    - cron: "0 6 * * *"      # 06:00 UTC (07:00 in Lagos), every day
+    # 06:17 UTC (07:17 in Lagos), every day. GitHub treats this as a request,
+    # not a promise: scheduled runs queue behind everyone else's and can start
+    # hours late. An odd minute avoids the rush of jobs set for the top of the hour.
+    - cron: "17 6 * * *"
   workflow_dispatch:          # adds a "Run workflow" button for manual runs
 
 permissions:
@@ -45,7 +49,7 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       # First, so the tables survive even if a later step fails.
-      - name: Keep the tables from expiring
+      - name: Rebuild tables close to the sandbox's 60-day limit
         run: python scripts/08_keep_tables_alive.py
 
       - name: Refresh the checks
@@ -55,10 +59,10 @@ jobs:
         run: python scripts/04_measure_accuracy.py
 
       # The Claude key is given to this step only, not to the whole job.
-      - name: Triage new exceptions (at most 20)
+      - name: Triage the next 20 exceptions in the queue
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/06_triage_with_llm.py --max 20
+        run: python scripts/06_triage_with_llm.py --source queue --max 20
 
       - name: Refresh the dashboard views
         run: python scripts/09_create_dashboard_views.py
